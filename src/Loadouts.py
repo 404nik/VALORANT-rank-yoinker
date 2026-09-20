@@ -85,6 +85,13 @@ class Loadouts:
         valoApiPlayerCards = requests.get(
             "https://valorant-api.com/v1/playercards")
 
+        # Look agents up once, case-insensitively. Riot's CharacterID casing
+        # is not guaranteed to match valorant-api's uuids, and re-parsing the
+        # response inside the player loop was both slow and easy to get wrong.
+        agents_by_uuid = {
+            a["uuid"].lower(): a for a in valoApiAgents.json()["data"]
+        }
+
         final_final_json = {"Players": {},
                             "time": int(time.time()),
                             "map": self.current_map}
@@ -119,12 +126,16 @@ class Loadouts:
 
                 PlayerInventory = loadout_entry
 
+                agent_info = agents_by_uuid.get(
+                    str(player.get("CharacterID", "")).lower())
+
                 # creates name field
                 if hide_names:
-                    for agent in valoApiAgents.json()["data"]:
-                        if agent["uuid"] == player["CharacterID"]:
-                            final_json[subject].update(
-                                {"Name": agent["displayName"]})
+                    # A missed lookup must not fall through to the real name --
+                    # hide_names is on precisely to keep that hidden.
+                    final_json[subject].update(
+                        {"Name": agent_info["displayName"] if agent_info
+                         else "Unknown"})
                 else:
                     final_json[subject].update({"Name": names[subject]})
 
@@ -148,12 +159,15 @@ class Loadouts:
                         final_json[subject].update(
                             {"PlayerCard": PCard["largeArt"]})
 
-                for agent in valoApiAgents.json()["data"]:
-                    if agent["uuid"] == player["CharacterID"]:
-                        final_json[subject].update(
-                            {"AgentArtworkName": agent["displayName"] + "Artwork"})
-                        final_json[subject].update(
-                            {"Agent": agent["displayIcon"]})
+                if agent_info is not None:
+                    final_json[subject].update(
+                        {"AgentArtworkName": agent_info["displayName"] + "Artwork"})
+                    final_json[subject].update(
+                        {"Agent": agent_info["displayIcon"]})
+                else:
+                    self.log(
+                        "no agent matched CharacterID "
+                        f"{player.get('CharacterID', '<missing>')!r} for {subject}")
 
                 spray_selections = [
                     s for s in PlayerInventory.get("Expressions", {}).get("AESSelections", [])
