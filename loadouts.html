@@ -52,6 +52,7 @@
   .agent{width:44px;height:44px;border-radius:50%;background:#0d1216;flex:none;object-fit:cover}
   .who{width:190px;flex:none;min-width:0}
   .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .name.unknown{color:var(--dim);font-style:italic;font-weight:500}
   .sub{color:var(--dim);font-size:12px}
   .guns{display:flex; gap:10px; flex-wrap:wrap; flex:1; min-width:0}
   .gun{width:150px}
@@ -135,7 +136,11 @@ function connect(){
 }
 
 function render(data){
-  const players = Object.values(data.Players || {}).filter(p => p && p.Name);
+  // Keep anyone who has a loadout even if vRY couldn't resolve their agent --
+  // when the agent lookup misses, Name and Agent are both absent, and dropping
+  // those entries silently loses a player from the match.
+  const players = Object.values(data.Players || {})
+    .filter(p => p && (p.Name || Object.keys(p.Weapons || {}).length));
   $("meta").textContent = players.length
     ? `${players.length} players · ${data.map || "unknown map"} · updated ${new Date((data.time||0)*1000).toLocaleTimeString()}`
     : "";
@@ -146,7 +151,8 @@ function render(data){
   }
 
   // Blue team first, then Red, so teams stay visually grouped.
-  players.sort((a,b) => String(a.Team).localeCompare(String(b.Team)) || a.Name.localeCompare(b.Name));
+  players.sort((a,b) => String(a.Team).localeCompare(String(b.Team))
+    || String(a.Name || "￿").localeCompare(String(b.Name || "￿")));
 
   $("rows").innerHTML = players.map(p => {
     const guns = Object.values(p.Weapons || {})
@@ -162,7 +168,7 @@ function render(data){
       <div class="player ${esc(p.Team || "")}">
         ${p.Agent ? `<img class="agent" src="${esc(p.Agent)}" alt="" loading="lazy">` : `<div class="agent"></div>`}
         <div class="who">
-          <div class="name">${esc(p.Name)}</div>
+          <div class="name${p.Name ? "" : " unknown"}">${esc(p.Name || "Unknown agent")}</div>
           <div class="sub">${p.Level ? "Lvl " + esc(p.Level) : ""}</div>
         </div>
         <div class="guns">${guns || '<span class="sub">no skins for selected weapons</span>'}</div>
