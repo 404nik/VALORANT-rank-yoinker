@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match Loadouts</title>
+<style>
+  :root{
+    --bg:#0f1418; --panel:#161d23; --line:#242e37;
+    --text:#e6edf3; --dim:#8b9aa7;
+    --blue:#3fa9d8; --red:#e7554b; --accent:#ff4655;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.45 "Segoe UI",system-ui,sans-serif;
+  }
+  header{
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    padding:10px 16px; background:var(--panel);
+    border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5;
+  }
+  .dot{width:9px;height:9px;border-radius:50%;background:#666;flex:none}
+  .dot.on{background:#3ddc84} .dot.off{background:var(--accent)}
+  #status{color:var(--dim); font-size:13px}
+  input{
+    background:#0d1216; color:var(--text); border:1px solid var(--line);
+    border-radius:5px; padding:5px 8px; font:inherit;
+  }
+  input#host{width:120px} input#port{width:64px}
+  button{
+    background:#202b34; color:var(--text); border:1px solid var(--line);
+    border-radius:5px; padding:5px 11px; font:inherit; cursor:pointer;
+  }
+  button:hover{border-color:#3a4854}
+  .chips{display:flex; gap:6px; flex-wrap:wrap; margin-left:auto}
+  .chip{
+    padding:4px 10px; border-radius:999px; border:1px solid var(--line);
+    background:#131a20; color:var(--dim); cursor:pointer; font-size:12.5px;
+    user-select:none;
+  }
+  .chip.on{background:var(--accent); border-color:var(--accent); color:#fff}
+  main{padding:14px 16px 40px}
+  .meta{color:var(--dim); font-size:12.5px; margin-bottom:12px}
+  .player{
+    display:flex; align-items:center; gap:14px; padding:10px 12px;
+    background:var(--panel); border:1px solid var(--line);
+    border-left:3px solid var(--line); border-radius:7px; margin-bottom:8px;
+  }
+  .player.Blue{border-left-color:var(--blue)}
+  .player.Red{border-left-color:var(--red)}
+  .agent{width:44px;height:44px;border-radius:50%;background:#0d1216;flex:none;object-fit:cover}
+  .who{width:190px;flex:none;min-width:0}
+  .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub{color:var(--dim);font-size:12px}
+  .guns{display:flex; gap:10px; flex-wrap:wrap; flex:1; min-width:0}
+  .gun{width:150px}
+  .gun img{width:100%;height:42px;object-fit:contain;display:block}
+  .gun .n{
+    font-size:11.5px;color:var(--dim);text-align:center;margin-top:2px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .empty{color:var(--dim);padding:40px 0;text-align:center}
+  @media(max-width:700px){
+    .player{flex-wrap:wrap} .who{width:auto} .gun{width:110px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="dot"></span>
+  <span id="status">connecting…</span>
+  <input id="host" placeholder="host"><input id="port" placeholder="port">
+  <button id="reconnect">connect</button>
+  <div class="chips" id="chips"></div>
+</header>
+
+<main>
+  <div class="meta" id="meta"></div>
+  <div id="rows"><div class="empty">Waiting for a match… start vRY and join a game.</div></div>
+</main>
+
+<script>
+// Weapons shown by default. Click a chip to toggle; choice is remembered.
+const DEFAULT_GUNS = ["Vandal","Phantom","Operator","Sheriff","Melee"];
+const ALL_GUNS = ["Classic","Shorty","Frenzy","Ghost","Sheriff","Stinger",
+  "Spectre","Bucky","Judge","Bulldog","Guardian","Phantom","Vandal",
+  "Marshal","Outlaw","Operator","Ares","Odin","Melee"];
+
+const $ = id => document.getElementById(id);
+let ws = null, last = null;
+
+function load(k, d){ try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch(e){ return d; } }
+function save(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+
+let shown = load("vry.guns", DEFAULT_GUNS);
+$("host").value = load("vry.host", location.hostname && location.protocol !== "file:" ? location.hostname : "127.0.0.1");
+$("port").value = load("vry.port", 1100);
+
+function drawChips(){
+  $("chips").innerHTML = "";
+  ALL_GUNS.forEach(g => {
+    const b = document.createElement("span");
+    b.className = "chip" + (shown.includes(g) ? " on" : "");
+    b.textContent = g;
+    b.onclick = () => {
+      shown = shown.includes(g) ? shown.filter(x => x !== g) : [...shown, g];
+      save("vry.guns", shown); drawChips(); if (last) render(last);
+    };
+    $("chips").append(b);
+  });
+}
+
+function setStatus(text, cls){
+  $("status").textContent = text;
+  $("dot").className = "dot" + (cls ? " " + cls : "");
+}
+
+function connect(){
+  const host = $("host").value.trim(), port = $("port").value.trim();
+  save("vry.host", host); save("vry.port", port);
+  if (ws) { ws.onclose = null; ws.close(); }
+  setStatus("connecting…", "");
+  try { ws = new WebSocket(`ws://${host}:${port}`); }
+  catch(e){ return setStatus("bad address", "off"); }
+
+  ws.onopen  = () => setStatus(`connected to ${host}:${port}`, "on");
+  ws.onclose = () => { setStatus("disconnected — retrying in 3s", "off"); setTimeout(connect, 3000); };
+  ws.onerror = () => setStatus("connection failed", "off");
+  ws.onmessage = e => {
+    let d; try { d = JSON.parse(e.data); } catch(err){ return; }
+    if (d.type === "matchLoadout") { last = d; render(d); }
+  };
+}
+
+function render(data){
+  const players = Object.values(data.Players || {}).filter(p => p && p.Name);
+  $("meta").textContent = players.length
+    ? `${players.length} players · ${data.map || "unknown map"} · updated ${new Date((data.time||0)*1000).toLocaleTimeString()}`
+    : "";
+
+  if (!players.length){
+    $("rows").innerHTML = '<div class="empty">No loadouts in this state yet.</div>';
+    return;
+  }
+
+  // Blue team first, then Red, so teams stay visually grouped.
+  players.sort((a,b) => String(a.Team).localeCompare(String(b.Team)) || a.Name.localeCompare(b.Name));
+
+  $("rows").innerHTML = players.map(p => {
+    const guns = Object.values(p.Weapons || {})
+      .filter(w => w.weapon && shown.includes(w.weapon))
+      .sort((a,b) => shown.indexOf(a.weapon) - shown.indexOf(b.weapon))
+      .map(w => `
+        <div class="gun" title="${esc(w.weapon)} — ${esc(w.skinDisplayName || "")}">
+          ${w.skinDisplayIcon ? `<img src="${esc(w.skinDisplayIcon)}" alt="" loading="lazy">` : ""}
+          <div class="n">${esc(w.skinDisplayName || "—")}</div>
+        </div>`).join("");
+
+    return `
+      <div class="player ${esc(p.Team || "")}">
+        ${p.Agent ? `<img class="agent" src="${esc(p.Agent)}" alt="" loading="lazy">` : `<div class="agent"></div>`}
+        <div class="who">
+          <div class="name">${esc(p.Name)}</div>
+          <div class="sub">${p.Level ? "Lvl " + esc(p.Level) : ""}</div>
+        </div>
+        <div class="guns">${guns || '<span class="sub">no skins for selected weapons</span>'}</div>
+      </div>`;
+  }).join("");
+}
+
+function esc(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+$("reconnect").onclick = connect;
+drawChips();
+connect();
+</script>
+</body>
+</html>
